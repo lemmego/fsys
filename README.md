@@ -1,3 +1,5 @@
+> ⚠️ This project is still experimental. Do not use this in production.
+
 # Fsys
 
 Fsys is a Go library for dealing with file systems.
