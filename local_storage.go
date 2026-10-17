@@ -39,6 +39,23 @@ func (ls *LocalStorage) resolvePath(storagePath string) (string, error) {
 
 	// EvalSymlinks requires the final path to exist. Check the nearest existing
 	// parent when this operation is creating a new file or directory.
+	//
+	// The walk stops at the root and never climbs past it, which is the whole
+	// of the fix for a bug this reported as a traversal attempt.
+	//
+	// A disk whose root does not exist yet is the ordinary state of a fresh
+	// deployment: nothing has been written, so storage/app/public is not
+	// there. Climbing above the root then finds the first directory that does
+	// exist — storage, or the working directory — which is of course not
+	// inside the root, and the old code called that "resolves outside local
+	// storage root". The message sent you hunting for a path-traversal bug
+	// when the real answer was "this directory has never been created", and
+	// the two have nothing to do with each other.
+	//
+	// Stopping at the root is also exactly as strict: every component from
+	// the root downwards is still resolved and checked, and the root itself
+	// was already resolved above. What is above the root is not this disk's
+	// business.
 	checkPath := fullPath
 	for {
 		resolved, evalErr := filepath.EvalSymlinks(checkPath)
@@ -50,6 +67,11 @@ func (ls *LocalStorage) resolvePath(storagePath string) (string, error) {
 		}
 		if !os.IsNotExist(evalErr) {
 			return "", evalErr
+		}
+		if checkPath == root {
+			// The root does not exist. Nothing under it can escape it, and a
+			// writer is about to create it.
+			break
 		}
 		parent := filepath.Dir(checkPath)
 		if parent == checkPath {
@@ -94,9 +116,22 @@ func (ls *LocalStorage) Read(path string) (io.ReadCloser, error) {
 	return os.Open(fullPath)
 }
 
+// Write creates the directories it needs, including the disk root.
+//
+// os.Create alone fails with ENOENT on a path one directory deep —
+// "avatars/x.jpg" on a disk that has never been written to — and every
+// caller then has to CreateDirectory first or carry the same MkdirAll.
+// Writing a file to a path is the operation being asked for; the directories
+// are an implementation detail of it.
+//
+// resolvePath has already established that fullPath is inside the root, so
+// this cannot create a directory anywhere else.
 func (ls *LocalStorage) Write(path string, contents []byte) error {
 	fullPath, err := ls.resolvePath(path)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return err
 	}
 	file, err := os.Create(fullPath)
@@ -155,6 +190,9 @@ func (ls *LocalStorage) Copy(sourcePath, destinationPath string) error {
 	}
 	defer sourceFile.Close()
 
+	if err := os.MkdirAll(filepath.Dir(destinationFullPath), 0o755); err != nil {
+		return err
+	}
 	destinationFile, err := os.Create(destinationFullPath)
 	if err != nil {
 		return err
