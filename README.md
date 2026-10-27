@@ -30,20 +30,61 @@ go get github.com/lemmego/fsys
 
 ## The drivers
 
+Local and memory come with the root package, because neither costs you
+anything — both are the standard library:
+
 ```go
 fsys.NewMemoryStorage()
 fsys.NewLocalStorage(basePath)
-fsys.NewS3Storage(bucket, region, accessKey, secretKey, baseEndpoint)
-fsys.NewGCSStorage(projectID, bucket, serviceAccountKey)
 ```
 
-`NewS3Storage`'s `baseEndpoint` is what makes it work against anything
+A cloud driver lives in its own package and registers itself when you import
+it, the way a `database/sql` driver does:
+
+```go
+import _ "github.com/lemmego/fsys/s3"   // or .../gcs
+
+disk, err := fsys.Open("s3", fsys.Settings{
+    "bucket":   "uploads",
+    "region":   "auto",
+    "key":      os.Getenv("S3_ACCESS_KEY_ID"),
+    "secret":   os.Getenv("S3_SECRET_ACCESS_KEY"),
+    "endpoint": os.Getenv("S3_ENDPOINT"),
+})
+```
+
+Or construct one directly, if you are not selecting it by name:
+
+```go
+store, err := s3.New(bucket, region, accessKey, secretKey, baseEndpoint)
+store, err := gcs.New(projectID, bucket, serviceAccountKey)
+```
+
+**Why the split.** This package is imported by `api/fs`,
+`api/providers/fs` and `media/provider`, and through them by every
+application on the framework. While S3 and GCS lived in the root, all of them
+linked both cloud SDKs whether or not they had ever seen a bucket. Measured on
+a trivial program, importing this package was the difference between 58
+packages and 691, and between a 2.3MB binary and 44MB. In one real
+application it was half the binary and several seconds of every rebuild.
+
+So you link the storage you blank-import and nothing else, and
+`deps_test.go` measures that rather than trusting it.
+
+`s3.New`'s `baseEndpoint` is what makes it work against anything
 S3-compatible — Cloudflare R2, MinIO, Backblaze B2, DigitalOcean Spaces. Leave
 it empty for AWS itself.
 
 `NewMemoryStorage` is the one to use in tests: no temporary directory to
 clean up, no ordering between tests, and `Driver()` still reports something
 your code can branch on.
+
+> **If you select a driver by name, import it.** A disk configured for `s3`
+> without `_ "github.com/lemmego/fsys/s3"` fails when the disk is first opened,
+> not at compile time — and it will pass on a development machine using the
+> local disk and fail in production. The error names the drivers that *are*
+> registered and tells you which import is missing, but the place to catch it
+> is the blank import.
 
 ## The interface
 
@@ -82,7 +123,9 @@ type and name the file from the format you detected.
 
 ## Writing your own driver
 
-Implement `fsys.FS`. Eleven methods is more than a minimal blob-store
+Implement `fsys.FS` and register it from your package's `init` with
+[fsys.Register], so an application reaches it by name the way it reaches the
+built-in drivers. Eleven methods is more than a minimal blob-store
 contract, because the interface is shaped to what an application does with
 uploads rather than to what a blob store is — so a driver carries the awkward
 parts instead of every caller carrying them.

@@ -1,4 +1,10 @@
-package fsys
+// Package s3 stores files in any S3-compatible bucket.
+//
+// Import it for its side effect to make the "s3" driver available to
+// [fsys.Open], and the AWS SDK is linked only where it is:
+//
+//	import _ "github.com/lemmego/fsys/s3"
+package s3
 
 import (
 	"bytes"
@@ -13,6 +19,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+
+	"github.com/lemmego/fsys"
 )
 
 // S3Storage is an implementation of StorageInterface for Amazon S3.
@@ -27,7 +35,7 @@ type S3Storage struct {
 	S3Client *s3.S3
 }
 
-func NewS3Storage(bucket, region, accessKey, secretKey string, baseEndpoint string) (*S3Storage, error) {
+func New(bucket, region, accessKey, secretKey string, baseEndpoint string) (*S3Storage, error) {
 	sess, err := session.NewSession(&aws.Config{
 		Endpoint:    aws.String(baseEndpoint),
 		Region:      aws.String(region),
@@ -45,7 +53,7 @@ func NewS3Storage(bucket, region, accessKey, secretKey string, baseEndpoint stri
 }
 
 func (s3s *S3Storage) Driver() string {
-	return DRIVER_S3
+	return fsys.DRIVER_S3
 }
 
 func (s3s *S3Storage) Read(path string) (io.ReadCloser, error) {
@@ -232,4 +240,21 @@ func (s3s *S3Storage) Upload(file multipart.File, header *multipart.FileHeader, 
 
 	// Optionally return the opened file after uploading
 	return s3s.Open(objectPath)
+}
+
+// init makes the driver available to fsys.Open once this package is imported.
+//
+// The settings are the keys api/fs already reads from a disk's configuration,
+// so an application that moves from constructing this directly to selecting
+// it by name changes nothing but the import.
+func init() {
+	fsys.Register(fsys.DRIVER_S3, func(s fsys.Settings) (fsys.FS, error) {
+		return New(
+			s.Get("bucket"),
+			s.Get("region"),
+			s.Get("key"),
+			s.Get("secret"),
+			s.Get("endpoint"),
+		)
+	})
 }

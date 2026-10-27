@@ -1,4 +1,10 @@
-package fsys
+// Package gcs stores files in Google Cloud Storage.
+//
+// Import it for its side effect to make the "gcs" driver available to
+// [fsys.Open], and the Google Cloud SDK is linked only where it is:
+//
+//	import _ "github.com/lemmego/fsys/gcs"
+package gcs
 
 import (
 	"context"
@@ -10,6 +16,8 @@ import (
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
+
+	"github.com/lemmego/fsys"
 )
 
 // GCSStorage is an implementation of StorageInterface for Google Cloud Storage.
@@ -21,7 +29,7 @@ type GCSStorage struct {
 	Client *storage.Client
 }
 
-func NewGCSStorage(projectID, bucket, serviceAccountKey string) (*GCSStorage, error) {
+func New(projectID, bucket, serviceAccountKey string) (*GCSStorage, error) {
 	ctx := context.Background()
 	client, err := storage.NewClient(ctx, option.WithCredentialsFile(serviceAccountKey))
 	if err != nil {
@@ -35,7 +43,7 @@ func NewGCSStorage(projectID, bucket, serviceAccountKey string) (*GCSStorage, er
 }
 
 func (gcs *GCSStorage) Driver() string {
-	return DRIVER_GCS
+	return fsys.DRIVER_GCS
 }
 
 func (gcs *GCSStorage) Read(path string) (io.ReadCloser, error) {
@@ -154,4 +162,15 @@ func (gcs *GCSStorage) Upload(file multipart.File, header *multipart.FileHeader,
 
 	// Optionally return the opened file after uploading
 	return gcs.Open(objectPath)
+}
+
+// init makes the driver available to fsys.Open once this package is imported.
+func init() {
+	fsys.Register(fsys.DRIVER_GCS, func(s fsys.Settings) (fsys.FS, error) {
+		return New(
+			s.Get("project_id"),
+			s.Get("bucket"),
+			s.Get("service_account_key"),
+		)
+	})
 }
